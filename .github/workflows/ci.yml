@@ -30,7 +30,7 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Unit tests (40+ cases covering transforms + contrast logic)
+      - name: Unit tests
         run: npm test
 
       - name: Round-trip example build (Tailwind + CSS + TS outputs)

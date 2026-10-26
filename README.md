@@ -2,15 +2,25 @@
 
 **One design-token source of truth, forged into Tailwind, CSS, and TypeScript -- with a WCAG contrast gate that fails your CI before a bad pair ships.**
 
+[![CI](https://github.com/SlateGitOrg/tokenforge/actions/workflows/ci.yml/badge.svg)](https://github.com/SlateGitOrg/tokenforge/actions/workflows/ci.yml)
+
 ![tokenforge](assets/hero.png)
 
-## The problem
+## Why
 
 Design and engineering teams end up maintaining color, spacing, and typography values in 3-5 disconnected places: a Figma library, a global CSS file, a `tailwind.config.js`, a mobile design-token JSON, maybe a native iOS/Android constants file. Every one of those copies drifts a little more each sprint. A rebrand or a dark-mode rollout then takes weeks, not because the work is hard, but because someone has to manually hunt down every surface that has its own stale copy of `primary-blue` -- and it's never the surface they remember to check.
 
 tokenforge treats the token *source* as the only thing a human edits. Everything else -- Tailwind's theme, runtime CSS variables for light/dark/high-contrast, and a typed TS module for component libraries -- is generated. A drift between two sources, or a contrast pair that quietly stopped meeting WCAG AA after someone "just nudged the hex a little," is caught by a CLI command instead of a support ticket three months later.
 
-## How it works
+## Features
+
+- Single JSON token source (colors with light/dark/high-contrast values, spacing, typography, contrast pairs), validated with Zod including cross-field reference checks.
+- Three generated outputs: a Tailwind theme extension, CSS custom properties for all three modes, and a typed TypeScript module.
+- WCAG 2.x contrast checker for every declared foreground/background pair in every applicable mode, with a non-zero exit code on failure.
+- Drift detector that reports added, removed and changed values between two token documents.
+- Runs fully offline; one runtime dependency (`zod`).
+
+## Architecture
 
 ```mermaid
 flowchart LR
@@ -46,7 +56,7 @@ A **diff command** compares two token documents (e.g. the source of truth vs. a 
 ```bash
 npm install
 npm run build      # compiles TypeScript -> dist/
-npm test           # runs the Vitest suite (100+ tests)
+npm test           # runs the Vitest suite (104 tests)
 
 # Validate + transform the bundled example token set
 npm run cli -- build --input examples/tokens.json --out-dir examples/output
@@ -72,6 +82,21 @@ docker run --rm tokenforge help
 ```
 
 The image's build stage runs `npm run build && npm test`, so a Docker build fails the same way CI does if the transforms or contrast logic regress.
+
+### Example output
+
+```text
+$ npm run cli -- check-contrast --input examples/tokens.json
+[PASS] body-text-on-background (light, AA): foreground on background = 17.85:1 (needs 4.5:1)
+[PASS] primary-button (light, AA): primaryForeground on primary = 5.17:1 (needs 4.5:1)
+...
+
+$ npm run cli -- diff --a examples/tokens.json --b examples/tokens-mobile-drifted.json
+3 drift entries detected:
+  ~ colors.primary.light: #2563eb -> #1d4ed8
+  + colors.warning = #f59e0b
+  - spacing.2xl (was 48px)
+```
 
 ## CLI reference
 
@@ -111,6 +136,15 @@ tokenforge diff --a <tokens-a.json> --b <tokens-b.json> [--fail-on-drift true]
 
 `dark` and `highContrast` are optional per color -- if omitted, every transform falls back to `light`, so nothing downstream ever receives an undefined value.
 
+## Testing
+
+```bash
+npm test            # Vitest: schema, contrast math, diff, all three transforms, CLI
+npm run typecheck   # tsc --noEmit
+```
+
+CI runs type check, build, tests, an example build and the contrast gate on Node 18 and 20.
+
 ## Project layout
 
 ```
@@ -123,17 +157,19 @@ src/
     tailwind.ts            -> Tailwind theme.extend fragment
     css.ts                 -> CSS custom properties (light/dark/high-contrast)
     typescript.ts          -> typed TS module
-tests/                    100+ Vitest unit tests (schema, contrast, diff, transforms, CLI)
+tests/                    Vitest unit tests (schema, contrast, diff, transforms, CLI)
 examples/
   tokens.json              Example source (checked in)
   tokens-mobile-drifted.json  Deliberately stale snapshot, for the diff demo
   output/                  Generated Tailwind/CSS/TS + a sample drift report (checked in, proves round-trip fidelity)
 ```
 
-## Why no visual/Figma sync?
+## Limitations and non-goals
 
-Scope, deliberately. Figma and native mobile exports are real integrations with their own auth and rate limits -- exactly the kind of "network + secrets" this project avoids so it stays runnable offline, in CI, or in a sandbox with zero configuration. The JSON source format here is intentionally close to what a Figma Tokens plugin or a Style Dictionary config already exports, so wiring one up is an input-adapter problem, not a rewrite.
+There is no Figma or native-mobile sync.
+
+Figma and native mobile exports are real integrations with their own auth and rate limits -- exactly the kind of "network + secrets" this project avoids so it stays runnable offline, in CI, or in a sandbox with zero configuration. The JSON source format here is intentionally close to what a Figma Tokens plugin or a Style Dictionary config already exports, so wiring one up is an input-adapter problem, not a rewrite.
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).
