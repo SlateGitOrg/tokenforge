@@ -8,9 +8,9 @@
 
 ## Why
 
-Design and engineering teams end up maintaining color, spacing, and typography values in 3-5 disconnected places: a Figma library, a global CSS file, a `tailwind.config.js`, a mobile design-token JSON, maybe a native iOS/Android constants file. Every one of those copies drifts a little more each sprint. A rebrand or a dark-mode rollout then takes weeks, not because the work is hard, but because someone has to manually hunt down every surface that has its own stale copy of `primary-blue` -- and it's never the surface they remember to check.
+Color, spacing and typography values often live in several places at once: a Figma library, a global stylesheet, a `tailwind.config.js`, a mobile token JSON, native constants. Each copy can drift from the others, and a rebrand or dark-mode rollout means finding every copy by hand.
 
-tokenforge treats the token *source* as the only thing a human edits. Everything else -- Tailwind's theme, runtime CSS variables for light/dark/high-contrast, and a typed TS module for component libraries -- is generated. A drift between two sources, or a contrast pair that quietly stopped meeting WCAG AA after someone "just nudged the hex a little," is caught by a CLI command instead of a support ticket three months later.
+tokenforge makes one JSON file the only thing a person edits. Tailwind's theme, CSS custom properties for light, dark and high-contrast modes, and a typed TypeScript module are generated from it. Two CLI commands cover the failure cases: `check-contrast` fails when a declared color pair drops below its WCAG level, and `diff` reports value differences between two token documents.
 
 ## Features
 
@@ -41,15 +41,20 @@ flowchart LR
     style G fill:#dc2626,color:#fff
 ```
 
-A single `tokens.json` is validated by a [Zod](https://zod.dev) schema (including cross-field checks -- e.g. a `contrastPairs` entry can't reference a color that doesn't exist). Three transforms then run against the same parsed document and emit, in parallel:
+`tokens.json` is validated by a [Zod](https://zod.dev) schema, plus a cross-field check that every `contrastPairs` entry references an existing color. The three transforms then run on the same parsed document:
 
-1. A **Tailwind theme extension** where every color resolves to `var(--tf-color-*)`, so switching a `data-theme`/`data-contrast` attribute at runtime re-themes Tailwind utility classes with zero rebuild.
-2. **CSS custom properties** scoped to `:root`/`[data-theme='light']`, `@media (prefers-color-scheme: dark)` + `[data-theme='dark']`, and `[data-contrast='high']`.
-3. A **typed TypeScript module** (`as const` objects, derived union types, a `resolveColor(token, mode)` helper) for component libraries that want compile-time-checked token names.
+1. **Tailwind theme extension**: every color resolves to `var(--tf-color-*)`.
+2. **CSS custom properties**: scoped to `:root`/`[data-theme='light']`, `@media (prefers-color-scheme: dark)` plus `[data-theme='dark']`, and `[data-contrast='high']`.
+3. **Typed TypeScript module**: `as const` objects, derived union types and a `resolveColor(token, mode)` helper.
 
-A **WCAG contrast checker** computes real contrast ratios (WCAG 2.x relative-luminance formula, not an approximation) for every declared foreground/background pair, across every mode that pair applies to, and exits non-zero the moment one breaks its required level -- usable directly as a CI gate on pull requests.
+`check-contrast` computes WCAG 2.x contrast ratios (relative-luminance formula) for each declared pair in each applicable mode and exits non-zero if any pair misses its level. `diff` compares two token documents and lists added, removed and changed values.
 
-A **diff command** compares two token documents (e.g. the source of truth vs. a snapshot exported from the mobile app) and reports every added, removed, or changed value -- the exact kind of check that would have caught a stale pre-rebrand blue sitting in one surface for months.
+## Design notes
+
+- **Tailwind colors resolve to `var(--tf-color-*)`, not literal hex values.** The Tailwind config is generated once; switching `data-theme` or `data-contrast` on an element changes the CSS variables and every utility class follows, with no rebuild. The trade-off is that Tailwind's opacity modifiers (such as `bg-primary/50`) can't be derived from a variable that holds an arbitrary color string.
+- **Missing modes fall back to light.** `dark` and `highContrast` are optional per color. The CSS output only declares a variable in the dark or high-contrast block when that mode is set, so other colors inherit the `:root` light value. The contrast checker applies the same fallback, so it evaluates the values a browser would actually render.
+- **Contrast is checked on the source, not on rendered output.** Pairs are declared explicitly in `contrastPairs`, so only listed combinations are tested. Unlisted foreground/background combinations are not.
+- **No network integrations.** There is no Figma or native-platform sync. Those need auth and have rate limits; leaving them out keeps every command deterministic and runnable offline or in CI. The input format is plain JSON, so an adapter can convert from another tool's export.
 
 ## Quick start
 
@@ -108,9 +113,9 @@ tokenforge diff --a <tokens-a.json> --b <tokens-b.json> [--fail-on-drift true]
 
 | Command | What it does | CI use |
 |---|---|---|
-| `build` | Validates the source, writes `tailwind.theme.mjs`, `variables.css`, `tokens.ts` | Run on every commit; commit outputs or publish as build artifacts |
-| `check-contrast` | Computes WCAG contrast ratios for every declared pair, across modes | **Non-zero exit on any AA/AAA failure** -- wire directly into a required PR check |
-| `diff` | Reports added/removed/changed values between two token documents | Compare source vs. a per-surface snapshot to catch silent drift; `--fail-on-drift` makes it a gate too |
+| `build` | Validates the source, writes `tailwind.theme.mjs`, `variables.css`, `tokens.ts` | Run on every commit; commit the outputs or publish them as build artifacts |
+| `check-contrast` | Computes WCAG contrast ratios for every declared pair, across modes | Exits 1 if any pair fails its level; usable as a required PR check |
+| `diff` | Reports added/removed/changed values between two token documents | Compare the source with a per-surface snapshot; exits 1 on drift only with `--fail-on-drift` |
 
 ## Token schema (excerpt)
 
@@ -134,7 +139,7 @@ tokenforge diff --a <tokens-a.json> --b <tokens-b.json> [--fail-on-drift true]
 }
 ```
 
-`dark` and `highContrast` are optional per color -- if omitted, every transform falls back to `light`, so nothing downstream ever receives an undefined value.
+`dark` and `highContrast` are optional per color; when omitted, the transforms and the contrast checker use the `light` value.
 
 ## Testing
 
@@ -166,9 +171,12 @@ examples/
 
 ## Limitations and non-goals
 
-There is no Figma or native-mobile sync.
-
-Figma and native mobile exports are real integrations with their own auth and rate limits -- exactly the kind of "network + secrets" this project avoids so it stays runnable offline, in CI, or in a sandbox with zero configuration. The JSON source format here is intentionally close to what a Figma Tokens plugin or a Style Dictionary config already exports, so wiring one up is an input-adapter problem, not a rewrite.
+- **No Figma or native sync.** The tool reads and writes local files only. Importing from Figma, Style Dictionary or a mobile app means converting to this JSON format first.
+- **No alias or reference tokens.** A color token is a literal value; one token cannot point at another. The schema accepts `var(--...)` strings as colors, but they are treated as plain text, and `check-contrast` throws on them.
+- **Only colors have modes.** `dark` and `highContrast` exist on color tokens only. Spacing and typography have a single value.
+- **Contrast math supports hex and `rgb()`/`rgba()` only.** `hsl()`, `transparent` and `currentColor` pass schema validation but cause `check-contrast` to fail with a parse error. Alpha is ignored.
+- **`diff` compares values by path.** A renamed token appears as one removed and one added entry. It covers colors, spacing, font families, sizes, weights and line heights; it does not compare `letterSpacings` or `contrastPairs`.
+- **Minimal argument parsing.** Flags must be written `--name value` (`--name=value` is not supported). A flag with no following value, or followed by another `--flag`, is set to `"true"`. `--fail-on-drift` only fails the run when its value is exactly `true`, so `--fail-on-drift false` or `--fail-on-drift yes` does not.
 
 ## License
 
